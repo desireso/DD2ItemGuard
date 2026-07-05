@@ -1,18 +1,7 @@
 {
-  "config_version": 5,
+  "config_version": 6,
   "enabled": false,
-  "read_only": false,
-  "max_collection_items": 200,
-  "max_reflection_members": 300,
-  "max_nested_collection_items": 80,
-  "max_observed_ui_events": 300,
   "grant_character_id": -2,
   "grant_event_type": 1,
-  "block_on_min": false,
-  "restore_shortage": true,
-  "method_probe_enabled": false,
-  "max_method_probe_events": 120,
-  "dump_file": "dd2_item_guard_probe_dump.json",
-  "extra_type_names": [],
   "items": {}
 }
