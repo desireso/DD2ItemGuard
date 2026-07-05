@@ -22,14 +22,15 @@ local UI_FONT_RANGES = {
 }
 
 local DEFAULT_CONFIG = {
-    config_version = 7,
+    config_version = 8,
     enabled = false,
     default_min_count = nil,
     items = {},
+    hidden_items = {},
 }
 
 local config = nil
-local last_status = "Loaded. Open inventory, add observed items, then enable enforcement."
+local last_status = "Loaded. Open inventory, set Min rules, or hide unwanted items. Changes auto-save."
 
 local read_number_field
 local try_english_item_name
@@ -119,6 +120,7 @@ local function load_config()
         enabled = DEFAULT_CONFIG.enabled,
         default_min_count = DEFAULT_CONFIG.default_min_count,
         items = {},
+        hidden_items = {},
     }
 
     if type(loaded) == "table" then
@@ -134,6 +136,9 @@ local function load_config()
         end
         if type(loaded.items) == "table" then
             merged.items = loaded.items
+        end
+        if type(loaded.hidden_items) == "table" then
+            merged.hidden_items = loaded.hidden_items
         end
     end
 
@@ -152,6 +157,16 @@ local function load_config()
             rule.mode = nil
         end
     end
+    if type(merged.hidden_items) ~= "table" then
+        merged.hidden_items = {}
+    end
+    for key, entry in pairs(merged.hidden_items) do
+        if type(entry) ~= "table" then
+            merged.hidden_items[key] = {}
+        elseif not is_valid_display_name(entry.name) then
+            entry.name = nil
+        end
+    end
 
     return merged
 end
@@ -162,6 +177,7 @@ local function config_for_save()
         enabled = config and config.enabled == true or false,
         default_min_count = nil,
         items = {},
+        hidden_items = {},
     }
 
     local default_min_count = config and tonumber(config.default_min_count) or nil
@@ -186,6 +202,17 @@ local function config_for_save()
             end
         end
     end
+    if config ~= nil and type(config.hidden_items) == "table" then
+        for key, entry in pairs(config.hidden_items) do
+            if type(entry) == "table" then
+                out.hidden_items[tostring(key)] = {
+                    name = is_valid_display_name(entry.name) and tostring(entry.name) or nil,
+                }
+            else
+                out.hidden_items[tostring(key)] = {}
+            end
+        end
+    end
 
     return out
 end
@@ -197,6 +224,10 @@ local function save_config()
     else
         warn("json.dump_file is unavailable; config not saved")
     end
+end
+
+local function auto_save_config()
+    save_config()
 end
 
 local function starts_with(value, prefix)
@@ -946,6 +977,12 @@ local function item_rule(item_id)
     return config.items[tostring(item_id)]
 end
 
+local function is_hidden_item(item_id)
+    return config ~= nil
+        and type(config.hidden_items) == "table"
+        and type(config.hidden_items[tostring(item_id)]) == "table"
+end
+
 local function maybe_restore_observed_item(event)
     if config == nil or config.enabled ~= true then
         return
@@ -953,6 +990,9 @@ local function maybe_restore_observed_item(event)
 
     local item_id = tonumber(event.item_id)
     if item_id == nil then
+        return
+    end
+    if is_hidden_item(item_id) then
         return
     end
 
@@ -1143,6 +1183,7 @@ local COLOR_ON_MIN_HOVER = 0xff44dd77
 local ITEM_COLUMN_CURRENT_X = 245
 local ITEM_COLUMN_TARGET_X = 340
 local ITEM_COLUMN_MIN_X = 465
+local ITEM_COLUMN_HIDE_X = 525
 local ITEM_NAME_DISPLAY_WIDTH = 22
 
 local function format_item_current(count)
@@ -1169,6 +1210,11 @@ local function ui_display_name(row)
     local rule = row and row.rule or nil
     if type(rule) == "table" and is_valid_display_name(rule.name) then
         return tostring(rule.name)
+    end
+
+    local hidden = config and type(config.hidden_items) == "table" and config.hidden_items[tostring(item_id)] or nil
+    if type(hidden) == "table" and is_valid_display_name(hidden.name) then
+        return tostring(hidden.name)
     end
 
     return "<unnamed>"
@@ -1345,7 +1391,7 @@ local function item_rows_list()
     local by_key = {}
     for _, item in pairs(known_observed_items) do
         local item_id = tonumber(item.item_id)
-        if item_id ~= nil then
+        if item_id ~= nil and not is_hidden_item(item_id) then
             by_key[tostring(item_id)] = {
                 item_id = item_id,
                 display_name = item.display_name,
@@ -1360,7 +1406,7 @@ local function item_rows_list()
         for key, rule in pairs(config.items) do
             if type(rule) == "table" then
                 local item_id = tonumber(key)
-                if item_id ~= nil then
+                if item_id ~= nil and not is_hidden_item(item_id) then
                     local row = by_key[tostring(item_id)] or {
                         item_id = item_id,
                     }
@@ -1381,6 +1427,33 @@ local function item_rows_list()
     for _, row in pairs(by_key) do
         table.insert(list, row)
     end
+    table.sort(list, function(a, b)
+        return tonumber(a.item_id or 0) < tonumber(b.item_id or 0)
+    end)
+    return list
+end
+
+local function hidden_item_rows_list()
+    local list = {}
+    if type(config.hidden_items) ~= "table" then
+        return list
+    end
+
+    for key, entry in pairs(config.hidden_items) do
+        local item_id = tonumber(key)
+        if item_id ~= nil then
+            local observed = known_observed_items[tostring(item_id)]
+            local name = observed and observed.display_name or nil
+            if not is_valid_display_name(name) and type(entry) == "table" then
+                name = entry.name
+            end
+            table.insert(list, {
+                item_id = item_id,
+                display_name = is_valid_display_name(name) and name or nil,
+            })
+        end
+    end
+
     table.sort(list, function(a, b)
         return tonumber(a.item_id or 0) < tonumber(b.item_id or 0)
     end)
@@ -1423,10 +1496,41 @@ local function toggle_item_rule(row, target)
     if type(rule) == "table" then
         config.items[key] = nil
         last_status = "Removed rule " .. key
+        auto_save_config()
         return
     end
 
     set_item_rule(row.item_id, valid_default_min_count() or target, ui_display_name(row))
+    auto_save_config()
+end
+
+local function hide_item(row)
+    local item_id = tonumber(row and row.item_id or nil)
+    if item_id == nil then
+        return
+    end
+
+    local key = tostring(item_id)
+    config.hidden_items = config.hidden_items or {}
+    config.hidden_items[key] = {
+        name = is_valid_display_name(ui_display_name(row)) and ui_display_name(row) or nil,
+    }
+    if type(config.items) == "table" then
+        config.items[key] = nil
+    end
+    last_status = "Hid item " .. tostring(ui_display_name(row))
+    auto_save_config()
+end
+
+local function unhide_item(row)
+    local item_id = tonumber(row and row.item_id or nil)
+    if item_id == nil or type(config.hidden_items) ~= "table" then
+        return
+    end
+
+    config.hidden_items[tostring(item_id)] = nil
+    last_status = "Unhid item " .. tostring(ui_display_name(row))
+    auto_save_config()
 end
 
 local function push_button_color_if_supported(color, hover_color)
@@ -1494,23 +1598,21 @@ local function draw_top_controls()
         if changed then
             config.enabled = value == true
             last_status = config.enabled and "Item Guard enabled" or "Item Guard disabled"
+            auto_save_config()
         end
     else
         imgui.text("Item Guard Enabled: " .. tostring(config.enabled == true))
         if imgui.button((config.enabled and "Disable" or "Enable") .. " Item Guard") then
             config.enabled = not config.enabled
             last_status = config.enabled and "Item Guard enabled" or "Item Guard disabled"
+            auto_save_config()
         end
     end
 
 end
 
 local function draw_config_controls()
-    if imgui.button("Save config") then
-        save_config()
-    end
-    imgui.same_line()
-    imgui.text("reframework/data/" .. CONFIG_FILE)
+    imgui.text("Auto-save: reframework/data/" .. CONFIG_FILE)
 end
 
 local function draw_default_min_count_control()
@@ -1532,6 +1634,7 @@ local function draw_default_min_count_control()
             config.default_min_count = nil
             last_status = "Default Min Count disabled"
         end
+        auto_save_config()
     end
 end
 
@@ -1541,7 +1644,7 @@ local function begin_items_columns()
     end
 
     local ok = pcall(function()
-        imgui.columns(4, "dd2_item_guard_items_columns", false)
+        imgui.columns(5, "dd2_item_guard_items_columns", false)
     end)
     if not ok then
         return false
@@ -1552,6 +1655,7 @@ local function begin_items_columns()
         pcall(function() imgui.set_column_width(1, 95) end)
         pcall(function() imgui.set_column_width(2, 125) end)
         pcall(function() imgui.set_column_width(3, 70) end)
+        pcall(function() imgui.set_column_width(4, 70) end)
     end
 
     return true
@@ -1604,6 +1708,7 @@ local function draw_target_input(key, target, rule)
         pending_rule_counts[key] = new_target
         if type(rule) == "table" then
             rule.count = new_target
+            auto_save_config()
         end
         return new_target
     end
@@ -1621,6 +1726,10 @@ local function draw_item_row_columns(row, key, rule, target, actual_count, obser
         toggle_item_rule(row, target)
     end
     next_item_column()
+    if imgui.button("Hide##hide_" .. key) then
+        hide_item(row)
+    end
+    next_item_column()
 end
 
 local function draw_item_row_positioned(row, key, rule, target, actual_count, observed_count, min_active)
@@ -1632,6 +1741,10 @@ local function draw_item_row_positioned(row, key, rule, target, actual_count, ob
     same_line_at(ITEM_COLUMN_MIN_X)
     if draw_mode_button("Min", min_active, COLOR_ON_MIN, COLOR_ON_MIN_HOVER, "mode_min_" .. key) then
         toggle_item_rule(row, target)
+    end
+    same_line_at(ITEM_COLUMN_HIDE_X)
+    if imgui.button("Hide##hide_" .. key) then
+        hide_item(row)
     end
 end
 
@@ -1666,6 +1779,26 @@ local function draw_items()
     end
 end
 
+local function draw_hidden_items()
+    if imgui.tree_node("Hidden Items") then
+        local list = hidden_item_rows_list()
+        if #list == 0 then
+            imgui.text("No hidden items.")
+        end
+
+        for _, row in ipairs(list) do
+            local key = tostring(row.item_id)
+            imgui.text(fixed_item_display_name(row))
+            imgui.same_line()
+            if imgui.button("Unhide##unhide_" .. key) then
+                unhide_item(row)
+            end
+        end
+
+        imgui.tree_pop()
+    end
+end
+
 local function draw_ui()
     if not imgui then
         return
@@ -1679,6 +1812,7 @@ local function draw_ui()
         draw_default_min_count_control()
 
         draw_items()
+        draw_hidden_items()
         imgui.tree_pop()
     end
     pop_ui_font_if_pushed(font_pushed)
