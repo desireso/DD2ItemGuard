@@ -9,6 +9,8 @@ local MOD = "DD2 Item Guard"
 local TAG = "[DD2IG] "
 local CONFIG_FILE = "dd2_item_guard.json"
 local UI_FONT_FILE = "D2Coding.ttf"
+local GRANT_CHARACTER_ID = -2
+local GRANT_EVENT_TYPE = 1
 
 local UI_FONT_RANGES = {
     0x0020, 0x00FF, -- Basic Latin + Latin-1
@@ -20,10 +22,9 @@ local UI_FONT_RANGES = {
 }
 
 local DEFAULT_CONFIG = {
-    config_version = 6,
+    config_version = 7,
     enabled = false,
-    grant_character_id = -2,
-    grant_event_type = 1,
+    default_min_count = nil,
     items = {},
 }
 
@@ -116,8 +117,7 @@ local function load_config()
     local merged = {
         config_version = DEFAULT_CONFIG.config_version,
         enabled = DEFAULT_CONFIG.enabled,
-        grant_character_id = DEFAULT_CONFIG.grant_character_id,
-        grant_event_type = DEFAULT_CONFIG.grant_event_type,
+        default_min_count = DEFAULT_CONFIG.default_min_count,
         items = {},
     }
 
@@ -125,11 +125,12 @@ local function load_config()
         if type(loaded.enabled) == "boolean" then
             merged.enabled = loaded.enabled
         end
-        if tonumber(loaded.grant_character_id) ~= nil then
-            merged.grant_character_id = tonumber(loaded.grant_character_id)
-        end
-        if tonumber(loaded.grant_event_type) ~= nil then
-            merged.grant_event_type = tonumber(loaded.grant_event_type)
+        local default_min_count = tonumber(loaded.default_min_count)
+        if default_min_count ~= nil then
+            default_min_count = math.floor(default_min_count)
+            if default_min_count >= 1 and default_min_count <= 99 then
+                merged.default_min_count = default_min_count
+            end
         end
         if type(loaded.items) == "table" then
             merged.items = loaded.items
@@ -143,9 +144,12 @@ local function load_config()
         if type(rule) ~= "table" then
             merged.items[key] = nil
         else
+            rule.count = math.max(1, math.floor(tonumber(rule.count) or 1))
             if type(rule) == "table" and not is_valid_display_name(rule.name) then
                 rule.name = nil
             end
+            rule.enabled = nil
+            rule.mode = nil
         end
     end
 
@@ -156,23 +160,29 @@ local function config_for_save()
     local out = {
         config_version = DEFAULT_CONFIG.config_version,
         enabled = config and config.enabled == true or false,
-        grant_character_id = config and tonumber(config.grant_character_id) or DEFAULT_CONFIG.grant_character_id,
-        grant_event_type = config and tonumber(config.grant_event_type) or DEFAULT_CONFIG.grant_event_type,
+        default_min_count = nil,
         items = {},
     }
+
+    local default_min_count = config and tonumber(config.default_min_count) or nil
+    if default_min_count ~= nil then
+        default_min_count = math.floor(default_min_count)
+        if default_min_count >= 1 and default_min_count <= 99 then
+            out.default_min_count = default_min_count
+        end
+    end
 
     if config ~= nil and type(config.items) == "table" then
         for key, rule in pairs(config.items) do
             if type(rule) == "table" then
                 local count = math.max(1, math.floor(tonumber(rule.count) or 1))
                 out.items[tostring(key)] = {
-                    enabled = rule.enabled ~= false,
-                    mode = "min",
                     count = count,
                     name = is_valid_display_name(rule.name) and tostring(rule.name) or nil,
                 }
-                rule.mode = "min"
                 rule.count = count
+                rule.enabled = nil
+                rule.mode = nil
             end
         end
     end
@@ -912,7 +922,7 @@ local function call_get_item(item_id, amount, character_id, event_type, reason)
 end
 
 local function configured_character_id()
-    local character_id = tonumber(config.grant_character_id)
+    local character_id = tonumber(GRANT_CHARACTER_ID)
     if character_id == nil then
         return nil
     end
@@ -926,7 +936,7 @@ local function configured_character_id()
 end
 
 local function give_item(item_id, amount, reason)
-    return call_get_item(item_id, amount, configured_character_id(), config.grant_event_type, reason)
+    return call_get_item(item_id, amount, configured_character_id(), GRANT_EVENT_TYPE, reason)
 end
 
 local function item_rule(item_id)
@@ -947,17 +957,12 @@ local function maybe_restore_observed_item(event)
     end
 
     local rule = item_rule(item_id)
-    if type(rule) ~= "table" or rule.enabled == false then
+    if type(rule) ~= "table" then
         return
     end
 
-    local mode = tostring(rule.mode or "min")
     local target = math.floor(tonumber(rule.count) or 0)
     if target <= 0 then
-        return
-    end
-
-    if mode ~= "min" then
         return
     end
 
@@ -1382,7 +1387,7 @@ local function item_rows_list()
     return list
 end
 
-local function set_item_rule(item_id, mode, count, display_name)
+local function set_item_rule(item_id, count, display_name)
     item_id = tonumber(item_id)
     if item_id == nil then
         return
@@ -1390,25 +1395,38 @@ local function set_item_rule(item_id, mode, count, display_name)
     count = math.max(1, math.floor(tonumber(count) or 1))
     config.items = config.items or {}
     config.items[tostring(item_id)] = {
-        enabled = true,
-        mode = mode,
         count = count,
         name = is_valid_display_name(display_name) and display_name or nil,
     }
     pending_rule_counts[tostring(item_id)] = count
-    last_status = "Set " .. tostring(mode) .. " rule: " .. tostring(display_name or item_id) .. " = " .. tostring(count)
+    last_status = "Set min rule: " .. tostring(display_name or item_id) .. " = " .. tostring(count)
     info(last_status)
 end
 
-local function toggle_item_rule(row, mode, target)
+local function valid_default_min_count()
+    local count = tonumber(config and config.default_min_count or nil)
+    if count == nil then
+        return nil
+    end
+
+    count = math.floor(count)
+    if count < 1 or count > 99 then
+        return nil
+    end
+
+    return count
+end
+
+local function toggle_item_rule(row, target)
     local key = tostring(row.item_id)
     local rule = config.items and config.items[key] or nil
-    if type(rule) == "table" and rule.enabled ~= false and tostring(rule.mode or "min") == mode then
+    if type(rule) == "table" then
         config.items[key] = nil
         last_status = "Removed rule " .. key
         return
     end
-    set_item_rule(row.item_id, mode, target, ui_display_name(row))
+
+    set_item_rule(row.item_id, valid_default_min_count() or target, ui_display_name(row))
 end
 
 local function push_button_color_if_supported(color, hover_color)
@@ -1495,6 +1513,28 @@ local function draw_config_controls()
     imgui.text("reframework/data/" .. CONFIG_FILE)
 end
 
+local function draw_default_min_count_control()
+    local value = math.floor(tonumber(config.default_min_count) or 0)
+    if imgui.push_item_width then
+        imgui.push_item_width(100)
+    end
+    local changed, new_value = imgui.drag_int("Default Min Count", value, 1, 0, 99)
+    if imgui.pop_item_width then
+        imgui.pop_item_width()
+    end
+
+    if changed then
+        new_value = math.floor(tonumber(new_value) or 0)
+        if new_value >= 1 and new_value <= 99 then
+            config.default_min_count = new_value
+            last_status = "Default Min Count set to " .. tostring(new_value)
+        else
+            config.default_min_count = nil
+            last_status = "Default Min Count disabled"
+        end
+    end
+end
+
 local function begin_items_columns()
     if imgui.columns == nil then
         return false
@@ -1578,7 +1618,7 @@ local function draw_item_row_columns(row, key, rule, target, actual_count, obser
     target = draw_target_input(key, target, rule)
     next_item_column()
     if draw_mode_button("Min", min_active, COLOR_ON_MIN, COLOR_ON_MIN_HOVER, "mode_min_" .. key) then
-        toggle_item_rule(row, "min", target)
+        toggle_item_rule(row, target)
     end
     next_item_column()
 end
@@ -1591,7 +1631,7 @@ local function draw_item_row_positioned(row, key, rule, target, actual_count, ob
     target = draw_target_input(key, target, rule)
     same_line_at(ITEM_COLUMN_MIN_X)
     if draw_mode_button("Min", min_active, COLOR_ON_MIN, COLOR_ON_MIN_HOVER, "mode_min_" .. key) then
-        toggle_item_rule(row, "min", target)
+        toggle_item_rule(row, target)
     end
 end
 
@@ -1606,13 +1646,12 @@ local function draw_items()
         for _, row in ipairs(list) do
             local key = tostring(row.item_id)
             local rule = row.rule
-            local mode = type(rule) == "table" and tostring(rule.mode or "min") or nil
             local target_character_id = configured_character_id()
             local actual_count = get_have_num(row.item_id, target_character_id)
             local target = tonumber(rule and rule.count) or tonumber(pending_rule_counts[key]) or tonumber(row.observed_count) or tonumber(actual_count) or 1
             target = math.max(1, math.floor(target))
 
-            local min_active = type(rule) == "table" and rule.enabled ~= false and mode == "min"
+            local min_active = type(rule) == "table"
             if using_columns then
                 draw_item_row_columns(row, key, rule, target, actual_count, row.observed_count, min_active)
             else
@@ -1637,6 +1676,7 @@ local function draw_ui()
         imgui.text("Status: " .. tostring(last_status))
         draw_top_controls()
         draw_config_controls()
+        draw_default_min_count_control()
 
         draw_items()
         imgui.tree_pop()

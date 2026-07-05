@@ -1,7 +1,6 @@
 {
-  "config_version": 6,
+  "config_version": 7,
   "enabled": false,
-  "grant_character_id": -2,
-  "grant_event_type": 1,
+  "default_min_count": null,
   "items": {}
 }
