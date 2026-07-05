@@ -5,7 +5,7 @@ REFramework Lua mod for Dragon's Dogma 2. It watches item rows shown in the inve
 ## Features
 
 - In-game REFramework UI under `Script Generated UI > DD2 Item Guard`
-- Unified `Items` panel sorted by numeric item ID
+- Separate `Items`, `Min Items`, and `Hidden Items` panels sorted by numeric item ID
 - Per-item `Min` rule
 - Per-item hide list for equipment, quest, or other unwanted rows
 - Direct target count editing with ImGui integer input
@@ -13,7 +13,7 @@ REFramework Lua mod for Dragon's Dogma 2. It watches item rows shown in the inve
 
 ## Install
 
-Install and enable `DD2_Item_Guard_v1.2.zip` with Fluffy Mod Manager.
+Install and enable `DD2_Item_Guard_v1.3.zip` with Fluffy Mod Manager.
 
 Manual layout:
 
@@ -46,9 +46,9 @@ If `reframework/fonts/D2Coding.ttf` is missing, the mod falls back to English it
 3. Enable `Item Guard Enabled`.
 4. Optionally set `Default Min Count` to use the same Min value for new rules.
 5. In `Items`, set the target count or use the default value.
-6. Click `Min` for the item.
+6. Click `Min` for the item to move it to `Min Items`.
 7. Click `Hide` to move unwanted rows to `Hidden Items`.
-8. Click active `Min` again to remove that rule.
+8. Click active `Min` in `Min Items` again to remove that rule.
 9. Use `Unhide` in `Hidden Items` to show an item again.
 
 Changes are saved automatically.

@@ -1388,45 +1388,56 @@ local function pop_ui_font_if_pushed(pushed)
 end
 
 local function item_rows_list()
-    local by_key = {}
+    local list = {}
     for _, item in pairs(known_observed_items) do
         local item_id = tonumber(item.item_id)
-        if item_id ~= nil and not is_hidden_item(item_id) then
-            by_key[tostring(item_id)] = {
+        if item_id ~= nil and not is_hidden_item(item_id) and item_rule(item_id) == nil then
+            table.insert(list, {
                 item_id = item_id,
                 display_name = item.display_name,
                 display_name_source = item.display_name_source,
                 observed_count = item.count,
                 last_seen = item.last_seen,
-            }
+            })
         end
     end
 
+    table.sort(list, function(a, b)
+        return tonumber(a.item_id or 0) < tonumber(b.item_id or 0)
+    end)
+    return list
+end
+
+local function min_item_rows_list()
+    local list = {}
     if type(config.items) == "table" then
         for key, rule in pairs(config.items) do
             if type(rule) == "table" then
                 local item_id = tonumber(key)
                 if item_id ~= nil and not is_hidden_item(item_id) then
-                    local row = by_key[tostring(item_id)] or {
+                    local observed = known_observed_items[tostring(item_id)]
+                    local row = {
                         item_id = item_id,
+                        rule = rule,
                     }
-                    row.rule = rule
+                    if observed ~= nil then
+                        row.display_name = observed.display_name
+                        row.display_name_source = observed.display_name_source
+                        row.observed_count = observed.count
+                        row.last_seen = observed.last_seen
+                    end
                     if not is_valid_display_name(row.display_name) then
                         row.display_name = nil
                     end
                     if row.display_name == nil and is_valid_display_name(rule.name) then
                         row.display_name = rule.name
                     end
-                    by_key[tostring(item_id)] = row
+                    table.insert(list, row)
                 end
             end
         end
     end
 
-    local list = {}
-    for _, row in pairs(by_key) do
-        table.insert(list, row)
-    end
     table.sort(list, function(a, b)
         return tonumber(a.item_id or 0) < tonumber(b.item_id or 0)
     end)
@@ -1638,13 +1649,13 @@ local function draw_default_min_count_control()
     end
 end
 
-local function begin_items_columns()
+local function begin_items_columns(id)
     if imgui.columns == nil then
         return false
     end
 
     local ok = pcall(function()
-        imgui.columns(5, "dd2_item_guard_items_columns", false)
+        imgui.columns(5, id or "dd2_item_guard_items_columns", false)
     end)
     if not ok then
         return false
@@ -1748,14 +1759,13 @@ local function draw_item_row_positioned(row, key, rule, target, actual_count, ob
     end
 end
 
-local function draw_items()
-    if imgui.tree_node("Items") then
-        local list = item_rows_list()
+local function draw_item_section(title, list, empty_text, column_id)
+    if imgui.tree_node(title) then
         if #list == 0 then
-            imgui.text("No item rows yet. Open the inventory and hover/scroll items.")
+            imgui.text(empty_text)
         end
 
-        local using_columns = begin_items_columns()
+        local using_columns = begin_items_columns(column_id)
         for _, row in ipairs(list) do
             local key = tostring(row.item_id)
             local rule = row.rule
@@ -1777,6 +1787,24 @@ local function draw_items()
 
         imgui.tree_pop()
     end
+end
+
+local function draw_items()
+    draw_item_section(
+        "Items",
+        item_rows_list(),
+        "No inactive item rows yet. Open the inventory and hover/scroll items.",
+        "dd2_item_guard_items_columns"
+    )
+end
+
+local function draw_min_items()
+    draw_item_section(
+        "Min Items",
+        min_item_rows_list(),
+        "No Min items.",
+        "dd2_item_guard_min_items_columns"
+    )
 end
 
 local function draw_hidden_items()
@@ -1812,6 +1840,7 @@ local function draw_ui()
         draw_default_min_count_control()
 
         draw_items()
+        draw_min_items()
         draw_hidden_items()
         imgui.tree_pop()
     end
